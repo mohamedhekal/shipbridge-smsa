@@ -19,10 +19,10 @@ composer require mohamedhekal/shipbridge mohamedhekal/shipbridge-smsa
 ### ٢) حط مفاتيح SMSA Express في `.env`
 ```env
 SHIPBRIDGE_DRIVER=smsa
-SMSA_API_KEY=your-key-here
+SMSA_PASSKEY=your-passkey-here
 SMSA_BASE_URL=https://track.smsaexpress.com/SecomRestWebApi/api
 ```
-> لو الشركة بتستخدم username/password أو OAuth، شوف ملف `config/smsa.php`.
+> SMSA يستخدم `PASSKEY` من لوحة SMSA.
 
 ### ٣) ابعت شحنة
 ```php
@@ -57,7 +57,8 @@ composer require mohamedhekal/shipbridge mohamedhekal/shipbridge-smsa
 
 ```env
 SHIPBRIDGE_DRIVER=smsa
-SMSA_API_KEY=your-key-here
+SMSA_PASSKEY=your-passkey-here
+SMSA_BASE_URL=https://track.smsaexpress.com/SecomRestWebApi/api
 ```
 
 ```php
