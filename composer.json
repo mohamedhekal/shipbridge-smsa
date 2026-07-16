@@ -21,9 +21,10 @@
     ],
     "require": {
         "php": "^8.2",
-        "mohamedhekal/shipbridge": "^0.1",
+        "ext-soap": "*",
+        "illuminate/http": "^11.0|^12.0",
         "illuminate/support": "^11.0|^12.0",
-        "illuminate/http": "^11.0|^12.0"
+        "mohamedhekal/shipbridge": "^0.1"
     },
     "require-dev": {
         "orchestra/testbench": "^9.0|^10.0",

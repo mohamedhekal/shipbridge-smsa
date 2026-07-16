@@ -15,164 +15,148 @@ use Hekal\ShipBridge\DTOs\TrackingResult;
 use Hekal\ShipBridge\Enums\LabelFormat;
 use Hekal\ShipBridge\Enums\ShipmentStatus;
 use Hekal\ShipBridge\Exceptions\ShipBridgeException;
+use Hekal\ShipBridge\Smsa\Contracts\SmsaGateway;
+use Hekal\ShipBridge\Smsa\Support\PayloadFactory;
 use Hekal\ShipBridge\Support\StatusNormalizer;
-use Illuminate\Http\Client\Factory as HttpFactory;
-use Illuminate\Http\Client\PendingRequest;
-use Illuminate\Http\Client\Response;
 
 /**
- * SMSA Express driver for ShipBridge (Saudi Arabia / GCC).
- *
- * Talks to a JSON shipping API. Point base_url/credentials at your SMSA Express
- * sandbox or production environment. Response fields expected:
- * id, tracking_number, status, label_url, events[].
+ * SMSA Express (Saudi Arabia) SECOM SOAP driver.
  */
 final class SmsaDriver implements CarrierDriver
 {
-    /**
-     * @param  array<string, mixed>  $config
-     */
     public function __construct(
-        private readonly HttpFactory $http,
+        private readonly SmsaGateway $gateway,
+        private readonly PayloadFactory $payloads,
         private readonly StatusNormalizer $normalizer,
-        private readonly array $config,
     ) {}
 
     public function createShipment(CreateShipmentRequest $request): ShipmentResult
     {
-        $payload = array_merge($request->toArray(), [
-            'carrier' => 'smsa',
-        ]);
+        $awb = $this->gateway->addShip($this->payloads->create($request));
 
-        $response = $this->client()->post('shipments', $payload);
-        $this->ensureOk($response);
-
-        return $this->shipmentFromPayload($response->json() ?? []);
+        return new ShipmentResult(
+            id: $awb,
+            trackingNumber: $awb,
+            status: ShipmentStatus::Created,
+            carrier: 'smsa',
+            labelUrl: null,
+            raw: ['awb' => $awb],
+        );
     }
 
     public function track(string $trackingNumber): TrackingResult
     {
-        $response = $this->client()->get("shipments/track/{$trackingNumber}");
-        $this->ensureOk($response);
+        $track = $this->gateway->getTrack($trackingNumber);
+        $events = $this->parseTrackEvents($track);
 
-        /** @var array<string, mixed> $payload */
-        $payload = $response->json() ?? [];
-        $status = $this->normalizer->normalize((string) ($payload['status'] ?? 'exception'));
+        if ($events === []) {
+            $statusPayload = $this->gateway->getStatus($trackingNumber);
+            $statusRaw = (string) ($statusPayload['status'] ?? 'exception');
+            $status = $this->normalizer->normalize($statusRaw);
+            $events[] = new TrackingEvent(status: $status, description: $statusRaw);
 
-        /** @var list<TrackingEvent> $events */
-        $events = [];
-        foreach ((array) ($payload['events'] ?? []) as $event) {
-            if (! is_array($event)) {
-                continue;
-            }
-
-            $events[] = new TrackingEvent(
-                status: $this->normalizer->normalize((string) ($event['status'] ?? $status->value)),
-                description: (string) ($event['description'] ?? ''),
-                occurredAt: isset($event['occurred_at']) ? (string) $event['occurred_at'] : null,
-                location: isset($event['location']) ? (string) $event['location'] : null,
+            return new TrackingResult(
+                trackingNumber: $trackingNumber,
+                status: $status,
+                events: $events,
+                raw: $statusPayload,
             );
         }
 
         return new TrackingResult(
-            trackingNumber: (string) ($payload['tracking_number'] ?? $trackingNumber),
-            status: $status,
+            trackingNumber: $trackingNumber,
+            status: $events[0]->status,
             events: $events,
-            raw: $payload,
+            raw: $track,
         );
     }
 
     public function label(string $shipmentId, LabelFormat $format = LabelFormat::Pdf): LabelResult
     {
-        $response = $this->client()->get("shipments/{$shipmentId}/label", [
-            'format' => $format->value,
-        ]);
-        $this->ensureOk($response);
+        $contents = $this->gateway->getPdf($shipmentId);
+        if ($contents === '') {
+            throw ShipBridgeException::carrierFailed('SMSA getPDF returned empty label.');
+        }
 
-        /** @var array<string, mixed> $payload */
-        $payload = $response->json() ?? [];
+        $base64 = ! str_starts_with($contents, '%PDF');
 
         return new LabelResult(
             shipmentId: $shipmentId,
             format: $format,
-            contents: (string) ($payload['contents'] ?? ''),
-            base64Encoded: (bool) ($payload['base64'] ?? true),
-            url: isset($payload['url']) ? (string) $payload['url'] : null,
+            contents: $contents,
+            base64Encoded: $base64,
+            url: null,
         );
     }
 
     public function createReturn(ReturnShipmentRequest $request): ShipmentResult
     {
-        $response = $this->client()->post(
-            "shipments/{$request->originalShipmentId}/returns",
-            $request->toArray(),
-        );
-        $this->ensureOk($response);
+        $awb = $this->gateway->addShip($this->payloads->returnShipment($request));
 
-        return $this->shipmentFromPayload($response->json() ?? []);
+        return new ShipmentResult(
+            id: $awb,
+            trackingNumber: $awb,
+            status: ShipmentStatus::Returned,
+            carrier: 'smsa',
+            raw: ['awb' => $awb],
+        );
     }
 
     public function createExchange(ExchangeShipmentRequest $request): ShipmentResult
     {
-        $response = $this->client()->post(
-            "shipments/{$request->originalShipmentId}/exchanges",
-            $request->toArray(),
-        );
-        $this->ensureOk($response);
+        $awb = $this->gateway->addShip($this->payloads->exchange($request));
 
-        return $this->shipmentFromPayload($response->json() ?? []);
-    }
-
-    private function client(): PendingRequest
-    {
-        $pending = $this->http
-            ->baseUrl(rtrim((string) ($this->config['base_url'] ?? ''), '/'))
-            ->timeout((int) ($this->config['timeout'] ?? 20))
-            ->acceptJson()
-            ->withHeaders([
-                'X-ShipBridge-Carrier' => 'smsa',
-            ]);
-
-        $token = $this->config['token'] ?? $this->config['api_key'] ?? $this->config['passkey'] ?? null;
-        if (is_string($token) && $token !== '') {
-            $pending = $pending->withToken($token);
-        }
-
-        $username = $this->config['username'] ?? null;
-        $password = $this->config['password'] ?? null;
-        if (is_string($username) && is_string($password) && $username !== '' && $password !== '') {
-            $pending = $pending->withBasicAuth($username, $password);
-        }
-
-        return $pending;
-    }
-
-    private function ensureOk(Response $response): void
-    {
-        if ($response->successful()) {
-            return;
-        }
-
-        throw ShipBridgeException::carrierFailed(
-            (string) ($response->json('message') ?? $response->body()),
-            $response->status(),
+        return new ShipmentResult(
+            id: $awb,
+            trackingNumber: $awb,
+            status: ShipmentStatus::Exchanged,
+            carrier: 'smsa',
+            raw: ['awb' => $awb],
         );
     }
 
     /**
-     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $track
+     * @return list<TrackingEvent>
      */
-    private function shipmentFromPayload(array $payload): ShipmentResult
+    private function parseTrackEvents(array $track): array
     {
-        $statusRaw = (string) ($payload['status'] ?? ShipmentStatus::Created->value);
+        $details = data_get($track, 'getTrackResult.TrackDetailsList.TrackDetails')
+            ?? data_get($track, 'TrackDetailsList.TrackDetails')
+            ?? data_get($track, 'getTrackResult');
 
-        return new ShipmentResult(
-            id: (string) ($payload['id'] ?? ''),
-            trackingNumber: (string) ($payload['tracking_number'] ?? ''),
-            status: $this->normalizer->normalize($statusRaw),
-            carrier: 'smsa',
-            labelUrl: isset($payload['label_url']) ? (string) $payload['label_url'] : null,
-            raw: $payload,
-        );
+        if (! is_array($details) || $details === []) {
+            return [];
+        }
+
+        // Single TrackDetails object vs list
+        if (isset($details['Activity']) || isset($details['Details'])) {
+            $details = [$details];
+        }
+
+        /** @var list<TrackingEvent> $events */
+        $events = [];
+        foreach ($details as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $activity = (string) ($row['Activity'] ?? $row['activity'] ?? $row['Status'] ?? '');
+            $desc = (string) ($row['Details'] ?? $row['details'] ?? $activity);
+            if ($activity === '' && $desc === '') {
+                continue;
+            }
+            $date = (string) ($row['Date'] ?? $row['date'] ?? '');
+            $time = (string) ($row['Time'] ?? $row['time'] ?? '');
+            $occurred = trim($date.' '.$time);
+
+            $events[] = new TrackingEvent(
+                status: $this->normalizer->normalize($activity !== '' ? $activity : $desc),
+                description: $desc !== '' ? $desc : $activity,
+                occurredAt: $occurred !== '' ? $occurred : null,
+                location: isset($row['Location']) ? (string) $row['Location'] : (isset($row['location']) ? (string) $row['location'] : null),
+            );
+        }
+
+        return $events;
     }
 }

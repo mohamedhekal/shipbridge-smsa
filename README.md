@@ -7,6 +7,8 @@
 
 **SMSA Express** shipping driver for [ShipBridge](https://github.com/mohamedhekal/shipbridge) · Region: **Saudi Arabia / GCC** / **السعودية والخليج**
 
+Real SECOM SOAP API: `SMSAwebService.asmx`
+
 ---
 
 ## بالعربي — في ٣ خطوات
@@ -16,13 +18,13 @@
 composer require mohamedhekal/shipbridge mohamedhekal/shipbridge-smsa
 ```
 
-### ٢) حط مفاتيح SMSA Express في `.env`
+### ٢) حط مفتاح SMSA في `.env`
 ```env
 SHIPBRIDGE_DRIVER=smsa
-SMSA_PASSKEY=your-passkey-here
-SMSA_BASE_URL=https://track.smsaexpress.com/SecomRestWebApi/api
+SMSA_PASSKEY=your-passkey
+SMSA_WSDL=http://track.smsaexpress.com/SECOM/SMSAwebService.asmx?WSDL
 ```
-> SMSA يستخدم `PASSKEY` من لوحة SMSA.
+> التفاصيل في [`docs/GUIDE_AR.md`](docs/GUIDE_AR.md).
 
 ### ٣) ابعت شحنة
 ```php
@@ -32,19 +34,14 @@ use Hekal\ShipBridge\DTOs\CreateShipmentRequest;
 use Hekal\ShipBridge\DTOs\Parcel;
 
 $shipment = ShipBridge::driver('smsa')->createShipment(new CreateShipmentRequest(
-    origin: new Address('المخزن', 'شارع ١', 'القاهرة', 'EG'),
-    destination: new Address('العميل', 'شارع النيل', 'الجيزة', 'EG', phone: '01000000000'),
-    parcels: [new Parcel(weightKg: 1.2)],
+    origin: new Address('المستودع', 'شارع الملك', 'Riyadh', 'SA', phone: '0110000000'),
+    destination: new Address('العميل', 'طريق فهد', 'Jeddah', 'SA', phone: '0555555555'),
+    parcels: [new Parcel(weightKg: 2.0, description: 'ملابس')],
     reference: 'ORD-42',
+    metadata: ['cod' => 50],
 ));
 
-echo $shipment->trackingNumber;
-```
-
-تتبع / ليبل / مرتجع:
-```php
-ShipBridge::driver('smsa')->track($shipment->trackingNumber);
-ShipBridge::driver('smsa')->label($shipment->id);
+echo $shipment->trackingNumber; // AWB
 ```
 
 ---
@@ -57,27 +54,16 @@ composer require mohamedhekal/shipbridge mohamedhekal/shipbridge-smsa
 
 ```env
 SHIPBRIDGE_DRIVER=smsa
-SMSA_PASSKEY=your-passkey-here
-SMSA_BASE_URL=https://track.smsaexpress.com/SecomRestWebApi/api
+SMSA_PASSKEY=your-passkey
 ```
 
 ```php
-ShipBridge::driver('smsa')->createShipment(...);
-ShipBridge::driver('smsa')->track('TRACKING');
-ShipBridge::driver('smsa')->label('SHIPMENT_ID');
+ShipBridge::driver('smsa')->createShipment(...); // addShip
+ShipBridge::driver('smsa')->track('AWB');         // getTrack
+ShipBridge::driver('smsa')->label('AWB');         // getPDF
 ```
 
-## How it fits
-
-```
-Your Laravel app
-      │
-      ▼
- ShipBridge  (one API for all carriers)
-      │
-      ▼
- shipbridge-smsa  ← this package (SMSA Express)
-```
+Requires PHP `ext-soap`. See [`docs/API.md`](docs/API.md).
 
 ## Testing
 

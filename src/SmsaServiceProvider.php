@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Hekal\ShipBridge\Smsa;
 
 use Hekal\ShipBridge\Facades\ShipBridge;
+use Hekal\ShipBridge\Smsa\Contracts\SmsaGateway;
+use Hekal\ShipBridge\Smsa\Support\PayloadFactory;
+use Hekal\ShipBridge\Smsa\Testing\FakeSmsaGateway;
 use Hekal\ShipBridge\Support\StatusNormalizer;
-use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
 
 final class SmsaServiceProvider extends ServiceProvider
@@ -28,10 +30,16 @@ final class SmsaServiceProvider extends ServiceProvider
             /** @var array<string, string> $driverMap */
             $driverMap = $config['status_map'] ?? [];
 
+            $gateway = $app->bound(SmsaGateway::class)
+                ? $app->make(SmsaGateway::class)
+                : ((bool) ($config['fake'] ?? false)
+                    ? new FakeSmsaGateway
+                    : new SoapSmsaGateway($config));
+
             return new SmsaDriver(
-                http: $app->make(HttpFactory::class),
+                gateway: $gateway,
+                payloads: new PayloadFactory($config),
                 normalizer: new StatusNormalizer(array_merge($aliases, $driverMap)),
-                config: $config,
             );
         });
     }
